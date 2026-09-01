@@ -1,0 +1,31 @@
+{
+  "name": "hy-simple-agent",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "前端工程师的 Agent 开发进阶之路 —— 可交互教学分享",
+  "scripts": {
+    "dev": "concurrently -n web,mcp -c cyan,magenta \"vite\" \"npm:mcp\"",
+    "dev:web": "vite",
+    "mcp": "tsx mcp-server/index.ts",
+    "build": "vue-tsc -b && vite build",
+    "preview": "vite preview",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "concurrently": "^10.0.5",
+    "highlight.js": "^11.12.0",
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.3.0",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "tsx": "^4.23.12",
+    "typescript": "~5.7.2",
+    "vite": "^6.0.7",
+    "vue-tsc": "^2.2.0"
+  }
+}

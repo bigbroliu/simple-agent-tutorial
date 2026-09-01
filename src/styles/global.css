@@ -1,0 +1,248 @@
+/* 浅色教程风 —— design tokens + 全局基础样式 */
+
+:root {
+  /* 主色:沉稳的靛蓝,教学场景不刺眼 */
+  --c-primary: #4f46e5;
+  --c-primary-soft: #eef2ff;
+  --c-primary-hover: #4338ca;
+
+  /* 中性色 */
+  --c-bg: #f7f8fa;
+  --c-surface: #ffffff;
+  --c-border: #e5e7eb;
+  --c-border-strong: #d1d5db;
+  --c-text: #1f2937;
+  --c-text-soft: #6b7280;
+  --c-text-faint: #9ca3af;
+
+  /* 语义色 */
+  --c-success: #059669;
+  --c-success-soft: #ecfdf5;
+  --c-warn: #d97706;
+  --c-warn-soft: #fffbeb;
+  --c-danger: #dc2626;
+  --c-danger-soft: #fef2f2;
+  --c-info: #0891b2;
+  --c-info-soft: #ecfeff;
+
+  /* 排版 */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'SF Mono', 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+
+  --radius: 10px;
+  --radius-sm: 6px;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04), 0 1px 3px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: var(--c-bg);
+  color: var(--c-text);
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--c-primary);
+  text-decoration: none;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+/* ---------- 通用组件类 ---------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--c-surface);
+  color: var(--c-text);
+  font-size: 14px;
+  transition: all 0.15s;
+}
+.btn:hover {
+  border-color: var(--c-primary);
+  color: var(--c-primary);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.btn-primary {
+  background: var(--c-primary);
+  border-color: var(--c-primary);
+  color: #fff;
+}
+.btn-primary:hover {
+  background: var(--c-primary-hover);
+  border-color: var(--c-primary-hover);
+  color: #fff;
+}
+.btn-sm {
+  padding: 4px 10px;
+  font-size: 13px;
+}
+
+.input,
+.textarea,
+.select {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  font-family: inherit;
+  background: var(--c-surface);
+  color: var(--c-text);
+}
+.input:focus,
+.textarea:focus,
+.select:focus {
+  outline: none;
+  border-color: var(--c-primary);
+  box-shadow: 0 0 0 3px var(--c-primary-soft);
+}
+.textarea {
+  resize: vertical;
+  min-height: 64px;
+  line-height: 1.5;
+}
+
+.card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+.tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.tag-primary {
+  background: var(--c-primary-soft);
+  color: var(--c-primary);
+}
+.tag-success {
+  background: var(--c-success-soft);
+  color: var(--c-success);
+}
+.tag-info {
+  background: var(--c-info-soft);
+  color: var(--c-info);
+}
+
+/* 代码块 */
+pre.code {
+  margin: 0;
+  padding: 16px;
+  background: #1e293b;
+  color: #e2e8f0;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.65;
+  /* 长行自动换行,不出现横向滚动条 */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-width: 100%;
+}
+code.inline {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: var(--c-primary-soft);
+  color: var(--c-primary-hover);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+/* 滚动条美化 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--c-border-strong);
+  border-radius: 4px;
+}
+
+/* ---------- highlight.js 语法高亮配色(深色,配 #1e293b 背景) ---------- */
+.hljs {
+  color: #e2e8f0;
+  background: transparent;
+}
+.hljs-comment,
+.hljs-quote {
+  color: #7c8aa0; /* 注释:柔和灰蓝 */
+  font-style: italic;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-type {
+  color: #c792ea; /* 关键字:紫 */
+}
+.hljs-string,
+.hljs-title.class_.inherited__,
+.hljs-regexp,
+.hljs-addition {
+  color: #a5e075; /* 字符串:绿 */
+}
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet {
+  color: #f78c6c; /* 数字:橙 */
+}
+.hljs-title,
+.hljs-title.function_,
+.hljs-section,
+.hljs-name {
+  color: #82aaff; /* 函数/名称:蓝 */
+}
+.hljs-attr,
+.hljs-attribute,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-property {
+  color: #ffcb6b; /* 属性:黄 */
+}
+.hljs-built_in,
+.hljs-class .hljs-title,
+.hljs-params {
+  color: #89ddff; /* 内置/参数:青 */
+}
+.hljs-meta,
+.hljs-punctuation {
+  color: #a6accd;
+}
+.hljs-emphasis {
+  font-style: italic;
+}
+.hljs-strong {
+  font-weight: 600;
+}
+
