@@ -12,6 +12,7 @@ import NoModelHint from '../components/NoModelHint.vue';
 import RequestInspector from '../components/RequestInspector.vue';
 import ToolCodeEditor from '../components/ToolCodeEditor.vue';
 import SourceViewer from '../components/SourceViewer.vue';
+import SeqDiagram, { type SeqLane, type SeqStep, type SeqStat } from '../components/SeqDiagram.vue';
 import { chatCompletion } from '../core/llm';
 import { setActiveTag } from '../core/inspector';
 import { toolSchemas, runTool } from '../core/tools';
@@ -228,6 +229,59 @@ runTool(call.function.name, args.expression);     // 读 .name、读 .expression
 
 // 如果模型回的是一句话"我想算 123456 乘 789",这几行代码全废 ——
 // call.function 是 undefined,程序没法执行。`;
+
+/* ============================================================
+ * 讲解区:可播放的单工具往返图
+ * 三条泳道(我们的代码 / 模型 / 工具),8 步走完一次 Tool Calling。
+ * 只有【一轮】—— 和第 5 课的循环形成对照:这里第 8 步就结束了,
+ * 如果模型还想再调一个工具,这段手写代码就接不住了。
+ * ============================================================ */
+
+const LANES: SeqLane[] = [
+  { icon: '🖥️', name: '我们的代码', sub: '(浏览器)' },
+  { icon: '🧠', name: '模型' },
+  { icon: '🔧', name: '工具', sub: '(calculator)' },
+];
+
+const STATS: SeqStat[] = [{ label: '次请求模型', count: 'call' }];
+
+const STEPS: SeqStep[] = [
+  {
+    from: 0, to: 0, kind: 'ask', meter: 2, group: '第 1 次请求',
+    label: '准备 messages:system + 用户问题',
+    note: '和前几课一样的两条消息。真正的新东西是下一步多带的那个字段。',
+  },
+  {
+    from: 0, to: 1, kind: 'call', meter: 2, label: 'messages + tools(工具说明书)',
+    note: '★ 本课唯一的新增:请求体里多了 tools 数组 —— 每个工具的名字、用途、参数 JSON Schema。模型这才知道"我有工具可用"。',
+  },
+  {
+    from: 1, to: 0, kind: 'ret', meter: 3, label: 'tool_calls,content 为空',
+    note: '★ 模型没有回答问题,而是回了一个结构化的请求:"我想调 calculator"。注意它只是【点名】—— 它没有、也不可能执行任何代码。',
+  },
+  {
+    from: 0, to: 0, kind: 'ask', meter: 3, dep: true,
+    label: 'JSON.parse(arguments)',
+    note: '★ 最常踩的坑:arguments 是一段【字符串】,不是对象,必须自己 parse。解析出来才是 { expression: "123456 * 789" }。',
+  },
+  {
+    from: 0, to: 2, kind: 'exec', meter: 3, dep: true, label: 'runTool("calculator", args)',
+    note: '★ 执行发生在我们这一侧。按名字派发到工具的 run 函数 —— 左侧「工具代码(可编辑)」里就是这段 run,你可以当场改。',
+  },
+  {
+    from: 2, to: 0, kind: 'obs', meter: 4, label: '"97406784"(精确结果)',
+    note: '工具返回真实结果,并以 role:"tool" + tool_call_id 追加进 messages —— tool_call_id 让模型知道这是哪次调用的结果。',
+  },
+  {
+    from: 0, to: 1, kind: 'call', meter: 4, loop: true, group: '第 2 次请求',
+    label: '带着工具结果再问一次',
+    note: '★ 一次工具调用 = 两次请求模型。第二次的 messages 里多了"模型的点名"和"工具的结果"两条。',
+  },
+  {
+    from: 1, to: 0, kind: 'final', meter: 5, label: '"结果是 97406784"',
+    note: '这次响应里没有 tool_calls,只有文字 —— 往返结束。但这套代码只写死了一轮:模型若想接着调第二个工具,这里就接不住了。那正是第 5 课要把它包进循环的原因。',
+  },
+];
 </script>
 
 <template>
@@ -297,6 +351,20 @@ runTool(call.function.name, args.expression);     // 读 .name、读 .expression
       <CodeBlock title="① 工具定义(发给模型)" lang="ts" :code="toolDefCode" />
       <div style="height: 12px" />
       <CodeBlock title="② 完整往返(core/tools.ts + llm.ts)" lang="ts" :code="flowCode" />
+
+      <h3 class="sec-title" style="margin-top: 20px">交互图:一次工具调用的完整往返</h3>
+      <p class="para">
+        把上面那段代码画出来。<b>点播放走一遍</b> —— 重点看两件事:
+        <b>模型只"点名"、执行永远在我们这边</b>;以及<b>一次工具调用要请求模型两次</b>。
+      </p>
+      <SeqDiagram
+        :lanes="LANES"
+        :steps="STEPS"
+        :stats="STATS"
+        meter-label="messages"
+        hint="点「▶ 播放」逐步观看一次 Tool Calling 往返:2 次请求模型、1 次工具执行、messages 从 2 条长到 5 条。"
+      />
+
       <ul class="points">
         <li><code class="inline">arguments</code> 是<b>字符串化的 JSON</b>,必须 <code class="inline">JSON.parse</code>,这是新手最常踩的坑。</li>
         <li>工具结果要用 <code class="inline">role: "tool"</code> + <code class="inline">tool_call_id</code> 回填,模型才知道对应哪次调用。</li>

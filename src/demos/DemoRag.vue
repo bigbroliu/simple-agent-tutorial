@@ -11,6 +11,7 @@ import CodeBlock from '../components/CodeBlock.vue';
 import NoModelHint from '../components/NoModelHint.vue';
 import RequestInspector from '../components/RequestInspector.vue';
 import SourceViewer from '../components/SourceViewer.vue';
+import SeqDiagram, { type SeqLane, type SeqStep, type SeqStat } from '../components/SeqDiagram.vue';
 import { chunkDocument, retrieve, buildAugmentedSystem, type Chunk } from '../core/rag';
 import { streamChatCompletion } from '../core/llm';
 import { setActiveTag } from '../core/inspector';
@@ -128,6 +129,69 @@ const matchCompare = `问题:  "团队版多少钱?"
 // 词重合度检索:两句没有"钱"这个共同词 → 可能漏掉 ❌
 // 向量语义检索:理解 "多少钱" ≈ "价格/元/定价" → 照样命中 ✅`;
 
+/* ============================================================
+ * 讲解区:可播放的 RAG 管线图
+ * 五条泳道 = 管线上的五个角色。两个分组:建库(离线一次)与查询(每次提问)。
+ * 重点让人看见:① 切分/向量化只在建库发生 ② 查询时"检索结果"如何变成 system
+ * ============================================================ */
+
+const RAG_LANES: SeqLane[] = [
+  { icon: '📄', name: '私有文档' },
+  { icon: '🔢', name: 'Embedding', sub: '(文本→向量)' },
+  { icon: '🗄️', name: '向量库' },
+  { icon: '🧩', name: '我们的代码', sub: '(拼上下文)' },
+  { icon: '🤖', name: '模型' },
+];
+
+const RAG_STATS: SeqStat[] = [{ label: '次调用 embedding', count: 'call' }];
+
+const RAG_STEPS: SeqStep[] = [
+  {
+    from: 0, to: 3, kind: 'ask', group: '阶段一 · 建库(离线,只做一次)',
+    label: '✂️ 切分:长文档 → 一堆小片段',
+    note: '文档太长,不能整篇当一个单位。先切成语义完整的小段(本 Demo 按空行切),左边"已切分为 N 个片段"就是这一步的结果。',
+  },
+  {
+    from: 3, to: 1, kind: 'call', label: '每个片段送去向量化',
+    note: '★ 注意:这一步只在建库阶段发生。文档有多大都无所谓 —— 它只是一次性的离线开销。',
+  },
+  {
+    from: 1, to: 2, kind: 'obs', label: '片段向量 [0.02, -0.88, …] 入库',
+    note: '每段文本变成一串数字,连同原文一起存进向量库。这就是那张"语义地图",意思相近的片段自然聚在一起。',
+  },
+  {
+    from: 3, to: 3, kind: 'ask', group: '阶段二 · 查询(在线,每次提问)',
+    label: '❓ 用户提问:"团队版多少钱?"',
+    note: '建库已经完成,从这里开始才是每次提问都要走一遍的热路径。',
+  },
+  {
+    from: 3, to: 1, kind: 'call', label: '问题也送去向量化',
+    dep: true,
+    note: '★ 关键:必须用【同一个】embedding 模型。只有这样,问题向量和文档向量才落在同一张地图上、能比较距离。',
+  },
+  {
+    from: 1, to: 2, kind: 'exec', label: '拿问题向量去库里找最近的几段',
+    note: '算余弦相似度,给所有候选打分排序。本 Demo 没有 embedding 接口,这一步换成了纯前端的词重合度打分。',
+  },
+  {
+    from: 2, to: 3, kind: 'obs', label: 'Top-K 命中片段(默认 3 段)',
+    note: '只返回最相关的前 K 段,并且低于阈值的直接丢弃 —— 宁缺毋滥。左侧运行区的"检索到的片段"就是这个返回值。',
+  },
+  {
+    from: 3, to: 3, kind: 'ret', dep: true,
+    label: '🧩 增强:把命中片段拼进 system',
+    note: '★ 这就是 RAG 里的 A(Augmented):检索结果被写进 system 提示词。展开左侧请求检查器,能亲眼看到 system 里多出来的那段资料。',
+  },
+  {
+    from: 3, to: 4, kind: 'call', label: 'system(含资料) + 用户问题',
+    note: '模型收到的是一个"开卷考试"的请求 —— 答案就在 system 里,它只需要据此组织语言。',
+  },
+  {
+    from: 4, to: 3, kind: 'final', label: '"团队版每月 199 元"',
+    note: '★ 模型本来完全不知道这件事。注意它没有"学到"新知识 —— 只是这次上下文里刚好有。关掉 RAG 再问,它就只能胡编或承认不知道。',
+  },
+];
+
 </script>
 
 <template>
@@ -221,37 +285,14 @@ const matchCompare = `问题:  "团队版多少钱?"
       <h3 class="sec-title" style="margin-top: 18px">全局架构:两个阶段</h3>
       <p class="para">
         有了 embedding 的概念,来看总体流程。RAG 分成<b>两个独立阶段</b> ——
-        建库只做一次,查询每次提问都走一遍:
+        建库只做一次,查询每次提问都走一遍。<b>点播放走一遍</b>,看清每一步东西交到了谁手上:
       </p>
-      <div class="arch">
-        <div class="phase phase-a">
-          <div class="phase-tag">阶段一 · 建库(离线,只做一次)</div>
-          <div class="flow">
-            <div class="node">📄<span>私有文档</span></div>
-            <span class="arrow">→</span>
-            <div class="node">✂️<span>切分 Chunk</span></div>
-            <span class="arrow">→</span>
-            <div class="node hl">🔢<span>Embedding<br />转成向量</span></div>
-            <span class="arrow">→</span>
-            <div class="node">🗄️<span>存入<br />向量库</span></div>
-          </div>
-        </div>
-
-        <div class="phase phase-b">
-          <div class="phase-tag">阶段二 · 查询(在线,每次提问)</div>
-          <div class="flow">
-            <div class="node">❓<span>用户提问</span></div>
-            <span class="arrow">→</span>
-            <div class="node hl">🔢<span>问题也<br />转成向量</span></div>
-            <span class="arrow">→</span>
-            <div class="node">🔍<span>向量库里<br />找最相近</span></div>
-            <span class="arrow">→</span>
-            <div class="node">🧩<span>拼进<br />上下文</span></div>
-            <span class="arrow">→</span>
-            <div class="node">🤖<span>模型<br />生成回答</span></div>
-          </div>
-        </div>
-      </div>
+      <SeqDiagram
+        :lanes="RAG_LANES"
+        :steps="RAG_STEPS"
+        :stats="RAG_STATS"
+        hint="点「▶ 播放」逐步观看完整管线:前 3 步是建库(只做一次),后 7 步是每次提问都要走的查询。"
+      />
       <p class="para arch-note">
         关键点:<b>建库和查询都用同一个 embedding 模型</b>,才能让"问题向量"和"文档向量"落在同一张
         语义地图上、可以比较距离。<b>切分和向量化只发生在建库阶段</b> —— 查询时文档早已是现成的向量,
@@ -588,72 +629,8 @@ const matchCompare = `问题:  "团队版多少钱?"
   margin-top: 4px;
 }
 /* ---- 两阶段架构图 ---- */
-.arch {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  margin: 4px 0 6px;
-}
-.phase {
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius-sm);
-  padding: 10px 12px 14px;
-  background: var(--c-bg);
-}
-.phase-a {
-  border-left: 3px solid var(--c-primary);
-}
-.phase-b {
-  border-left: 3px solid var(--c-success);
-}
-.phase-tag {
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--c-text-soft);
-  margin-bottom: 10px;
-}
-.flow {
-  display: flex;
-  align-items: stretch;
-  gap: 4px;
-  flex-wrap: wrap;
-}
-.node {
-  flex: 1;
-  min-width: 62px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 4px;
-  padding: 8px 6px;
-  background: var(--c-surface);
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius-sm);
-  font-size: 15px;
-  text-align: center;
-}
-.node span {
-  font-size: 11px;
-  line-height: 1.3;
-  color: var(--c-text-soft);
-}
-.node.hl {
-  border-color: var(--c-primary);
-  background: var(--c-primary-soft);
-}
-.node.hl span {
-  color: var(--c-primary-hover);
-  font-weight: 600;
-}
-.arrow {
-  align-self: center;
-  color: var(--c-text-faint);
-  font-size: 14px;
-  flex-shrink: 0;
-}
 .arch-note {
-  margin-top: 4px;
+  margin-top: 12px;
   font-size: 12.5px;
   color: var(--c-text-soft);
 }

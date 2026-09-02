@@ -4,7 +4,7 @@
  * 教学目标:把 Demo4 的"手动一轮"变成自动 while 循环(ReAct),
  * 并用 AgentTrace 可视化每一步。加入"开关灯"工具,让副作用肉眼可见。
  */
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import DemoLayout from '../components/DemoLayout.vue';
 import CodeBlock from '../components/CodeBlock.vue';
 import NoModelHint from '../components/NoModelHint.vue';
@@ -12,6 +12,7 @@ import AgentTrace from '../components/AgentTrace.vue';
 import RequestInspector from '../components/RequestInspector.vue';
 import ToolCodeEditor from '../components/ToolCodeEditor.vue';
 import SourceViewer from '../components/SourceViewer.vue';
+import LoopDiagram, { type LoopNode, type LoopFrame } from '../components/LoopDiagram.vue';
 import { runAgentLoop, type AgentEvent } from '../core/agent';
 import { setActiveTag } from '../core/inspector';
 import { toolSchemas, setLampState } from '../core/tools';
@@ -119,6 +120,234 @@ const hermesCode = `<|im_start|>system
 
 <|im_start|>tool
 <tool_response>54</tool_response><|im_end|>`;
+
+/* ============================================================
+ * 讲解区:可播放的循环流程图
+ * 节点严格对应 core/agent.ts 里 runAgentLoop 的控制流。
+ * 播放时移动的是"当前执行位置",同一批节点被反复走过 —— 这就是循环。
+ * 剧本用的正是左侧默认那句 prompt:算 (18+7)*3 → 开灯 → 报时,三轮工具 + 一轮收尾。
+ * ============================================================ */
+
+const LOOP_NODES: LoopNode[] = [
+  {
+    id: 'init',
+    shape: 'start',
+    label: 'messages = [system, user]',
+    sub: '循环开始前只有两条消息',
+    code: 'const messages = [...opts.messages]',
+  },
+  {
+    id: 'ask',
+    shape: 'step',
+    inLoop: true,
+    label: '① 问模型:<code>chat(messages, { tools })</code>',
+    sub: '每轮都把【全部历史】重发一次 —— 这是唯一花钱的地方',
+    code: 'assistant = await chatCompletion(cfg, messages, { tools })',
+  },
+  {
+    id: 'push',
+    shape: 'step',
+    inLoop: true,
+    label: '② 把模型的回复追加进 messages',
+    code: 'messages.push(assistant)',
+  },
+  {
+    id: 'check',
+    shape: 'decision',
+    inLoop: true,
+    label: '③ 有 <code>tool_calls</code> 吗?',
+    sub: '整个循环的方向盘 —— 由模型的输出决定,不是我们的代码决定',
+    code: 'const calls = assistant.tool_calls ?? []',
+  },
+  {
+    id: 'done',
+    shape: 'exit',
+    inLoop: true,
+    label: '没有 → <code>return</code> 收尾,跳出循环 ✅',
+    sub: '模型不再点名工具,就等于它说"我做完了"',
+    code: 'if (calls.length === 0) return messages',
+  },
+  {
+    id: 'exec',
+    shape: 'step',
+    inLoop: true,
+    label: '④ 有 → 解析参数、校验、执行工具',
+    sub: 'JSON.parse(arguments) → validateArgs → runTool',
+    code: 'const result = await execTool(call.function.name, args)',
+  },
+  {
+    id: 'bad',
+    shape: 'error',
+    inLoop: true,
+    label: '参数非法 / 执行报错 → 把错误当结果回填',
+    sub: '★ 不 throw、不中断 —— 让模型下一轮自己纠正',
+    code: 'messages.push({ role: "tool", content: errText })',
+  },
+  {
+    id: 'feed',
+    shape: 'step',
+    inLoop: true,
+    label: '⑤ 结果以 <code>role:"tool"</code> 回填 messages',
+    sub: '历史又长了一条,下一轮模型就能看到它',
+    code: 'messages.push({ role: "tool", tool_call_id: call.id, content: result })',
+  },
+  {
+    id: 'guard',
+    shape: 'decision',
+    inLoop: true,
+    label: '⑥ <code>step &lt; maxSteps</code>?',
+    sub: '必须有的安全阀:模型若一直点名工具,这里兜住,避免死循环烧 token',
+    code: 'for (let step = 0; step < maxSteps; step++)',
+  },
+];
+
+/** 一轮的常规四步(问 → 追加 → 判断有工具 → 执行) */
+function turn(round: number, msgs: number, opts: { tool: string; result: string; note: string }): LoopFrame[] {
+  return [
+    {
+      node: 'ask',
+      round,
+      msgs,
+      note: opts.note,
+    },
+    { node: 'push', round, msgs: msgs + 1, note: `模型的回复进了历史。messages 现在 ${msgs + 1} 条。` },
+    {
+      node: 'check',
+      round,
+      msgs: msgs + 1,
+      branch: '有 →',
+      note: `响应里带着 tool_calls(${opts.tool}),所以不收尾 —— 继续往下走去执行它。`,
+    },
+    {
+      node: 'exec',
+      round,
+      msgs: msgs + 1,
+      note: `执行 ${opts.tool},拿到 ${opts.result}。注意执行发生在我们这侧,模型只是点了名。`,
+    },
+    {
+      node: 'feed',
+      round,
+      msgs: msgs + 2,
+      note: `结果以 role:"tool" 回填。messages 变成 ${msgs + 2} 条 —— 每轮都在变长,所以每轮都更贵。`,
+    },
+    {
+      node: 'guard',
+      round,
+      msgs: msgs + 2,
+      branch: `${round} < 6 ✓`,
+      loopBack: true,
+      note: '★ 没超预算 → 回到循环开头,带着刚才的结果再问一次。这一步就是"循环"本身。',
+    },
+  ];
+}
+
+const LOOP_FRAMES: LoopFrame[] = [
+  {
+    node: 'init',
+    round: 1,
+    msgs: 2,
+    note: '起点:只有 system 和用户那一句"算 (18+7)*3,然后开灯,再报时"。三件事怎么拆、先做哪件,我们的代码一个字都没写。',
+  },
+  ...turn(1, 2, {
+    tool: 'calculator',
+    result: '"75"',
+    note: '第 1 次问模型。它看到三个工具的说明书,决定先算数。',
+  }),
+  ...turn(2, 4, {
+    tool: 'toggle_lamp',
+    result: '"灯已打开 💡"',
+    note: '★ 同一行代码第 2 次执行 —— 唯一的差别是 messages 里多了 calculator 的结果。',
+  }),
+  ...turn(3, 6, {
+    tool: 'now',
+    result: '当前时间',
+    note: '第 3 次。模型记得还剩"报时"没做 —— 它是从历史里知道自己做到哪了的。',
+  }),
+  {
+    node: 'ask',
+    round: 4,
+    msgs: 8,
+    note: '第 4 次问模型。三件事都做完了,但循环并不知道 —— 它只会一直问下去。',
+  },
+  { node: 'push', round: 4, msgs: 9, note: '这次的回复也进历史。' },
+  {
+    node: 'check',
+    round: 4,
+    msgs: 9,
+    branch: '没有 →',
+    note: '★ 这次响应里没有 tool_calls,只有一段文字总结。',
+  },
+  {
+    node: 'done',
+    round: 4,
+    msgs: 9,
+    note: '★ 循环在这里 return。判断"任务完成"的是模型,不是我们的代码 —— 全程 4 次 API 调用、3 次工具执行,messages 从 2 条长到 9 条。',
+  },
+];
+
+/** 另一条剧本:模型给了非法参数,循环不崩,把错误喂回去让它自己改 */
+const ERR_FRAMES: LoopFrame[] = [
+  { node: 'init', round: 1, msgs: 2, note: '同样的起点。这次看一条不那么顺利的路径。' },
+  { node: 'ask', round: 1, msgs: 2, note: '第 1 次问模型。' },
+  { node: 'push', round: 1, msgs: 3, note: '回复进历史。' },
+  {
+    node: 'check',
+    round: 1,
+    msgs: 3,
+    branch: '有 →',
+    note: '模型点名了 calculator,继续往下执行。',
+  },
+  {
+    node: 'exec',
+    round: 1,
+    msgs: 3,
+    warn: true,
+    note: '⚠️ 但它给的 arguments 不是合法 JSON(或缺了必填字段)—— JSON.parse 抛错 / validateArgs 不通过。',
+  },
+  {
+    node: 'bad',
+    round: 1,
+    msgs: 4,
+    warn: true,
+    note: '★ 关键设计:不 throw、不中断循环,而是把错误信息当作 tool 结果回填 —— "参数不是合法 JSON,请重新以合法 JSON 调用"。',
+  },
+  {
+    node: 'guard',
+    round: 1,
+    msgs: 4,
+    branch: '1 < 6 ✓',
+    loopBack: true,
+    note: '照常回到开头。对循环来说,"报错"和"成功"没有区别 —— 都只是一条 role:"tool" 消息。',
+  },
+  {
+    node: 'ask',
+    round: 2,
+    msgs: 4,
+    note: '第 2 次问模型 —— 这次它的历史里带着那条错误提示。',
+  },
+  { node: 'push', round: 2, msgs: 5, note: '回复进历史。' },
+  {
+    node: 'check',
+    round: 2,
+    msgs: 5,
+    branch: '有 →',
+    note: '模型读到了错误,重新点名 calculator,这次参数合法了。',
+  },
+  { node: 'exec', round: 2, msgs: 5, note: '执行成功,拿到 "75"。模型自己纠正了错误。' },
+  { node: 'feed', round: 2, msgs: 6, note: '正确结果回填。' },
+  {
+    node: 'guard',
+    round: 2,
+    msgs: 6,
+    branch: '2 < 6 ✓',
+    loopBack: true,
+    note: '继续循环。这就是"把错误当观察喂回去"的价值 —— 一次失败没有毁掉整个任务。',
+  },
+];
+
+// 两条剧本切换:顺利路径 / 出错自我纠正
+const scenario = ref<'happy' | 'error'>('happy');
+const frames = computed(() => (scenario.value === 'happy' ? LOOP_FRAMES : ERR_FRAMES));
 </script>
 
 <template>
@@ -164,6 +393,33 @@ const hermesCode = `<|im_start|>system
         "我该说话了,还是该调工具?" 循环负责把这些小决定串成完整任务。
       </p>
       <CodeBlock title="core/agent.ts · runAgentLoop" lang="ts" :code="loopCode" />
+
+      <h3 class="sec-title" style="margin-top: 20px">流程图:跟着执行位置走一遍</h3>
+      <p class="para">
+        把上面那段代码变成可以"单步跟踪"的图。<b>点播放</b>,注意<b>移动的是执行位置,节点是同一批</b> ——
+        每个节点右上角的 <span class="hint-chip">×N</span> 就是它被走过的次数。这就是循环:
+        代码没变多,只是同一段被反复执行。
+      </p>
+
+      <div class="scen">
+        <span class="scen-label">剧本:</span>
+        <button class="scen-btn" :class="{ on: scenario === 'happy' }" @click="scenario = 'happy'">
+          ✅ 顺利完成(3 轮工具)
+        </button>
+        <button class="scen-btn" :class="{ on: scenario === 'error' }" @click="scenario = 'error'">
+          ⚠️ 参数出错 → 自我纠正
+        </button>
+      </div>
+
+      <LoopDiagram
+        :key="scenario"
+        :nodes="LOOP_NODES"
+        :frames="frames"
+        loop-label="(let step = 0; step < maxSteps; step++)"
+        :max-steps="6"
+        hint="点「▶ 播放」跟着执行位置走一遍。也可以用「下一轮 ⏭」直接跳到下一轮开头。"
+      />
+
       <ul class="points">
         <li><b>终止条件</b>:模型返回的消息里没有 <code class="inline">tool_calls</code>,说明它认为可以收尾了。</li>
         <li><b>maxSteps 上限</b>:必须有!否则模型若反复调工具就会死循环、烧 token。这是工程安全阀。</li>
@@ -299,6 +555,50 @@ const hermesCode = `<|im_start|>system
 }
 .points li {
   margin-bottom: 6px;
+}
+/* ---- 流程图的剧本切换 ---- */
+.scen {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.scen-label {
+  font-size: 11.5px;
+  color: var(--c-text-soft);
+}
+.scen-btn {
+  padding: 3px 10px;
+  font-size: 11.5px;
+  font-family: inherit;
+  border: 1px solid var(--c-border-strong);
+  border-radius: 999px;
+  background: var(--c-surface);
+  color: var(--c-text-soft);
+  transition: all 0.12s;
+}
+.scen-btn:hover {
+  border-color: var(--c-primary);
+  color: var(--c-primary);
+}
+.scen-btn.on {
+  background: var(--c-primary);
+  border-color: var(--c-primary);
+  color: #fff;
+  font-weight: 600;
+}
+/* 正文里引用"×N"徽标时的样式 */
+.hint-chip {
+  display: inline-block;
+  padding: 0 5px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 999px;
+  color: var(--c-primary-hover);
+  background: var(--c-primary-soft);
+  border: 1px solid #c7d2fe;
 }
 .qa {
   margin-top: 16px;

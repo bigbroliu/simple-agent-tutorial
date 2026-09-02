@@ -1,0 +1,20 @@
+{
+  "$comment": "把这个文件复制成 models.local.json 再填入你自己的 Key。models.local.json 已被 .gitignore 忽略,不会进版本库。",
+  "active": "DeepSeek-V3",
+  "models": [
+    {
+      "label": "DeepSeek-V3",
+      "protocol": "openai",
+      "baseURL": "https://api.deepseek.com/v1",
+      "apiKey": "sk-把这里换成你自己的-key",
+      "model": "deepseek-chat"
+    },
+    {
+      "label": "Claude",
+      "protocol": "anthropic",
+      "baseURL": "https://api.anthropic.com/v1",
+      "apiKey": "sk-ant-把这里换成你自己的-key",
+      "model": "claude-sonnet-4-5"
+    }
+  ]
+}

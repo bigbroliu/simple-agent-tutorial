@@ -11,6 +11,7 @@ import AgentTrace from '../components/AgentTrace.vue';
 import RequestInspector from '../components/RequestInspector.vue';
 import ToolCodeEditor from '../components/ToolCodeEditor.vue';
 import SourceViewer from '../components/SourceViewer.vue';
+import SeqDiagram, { type SeqLane, type SeqStep, type SeqStat } from '../components/SeqDiagram.vue';
 import { runAgentLoop, type AgentEvent } from '../core/agent';
 import { setActiveTag } from '../core/inspector';
 import { toolSchemas, setLampState } from '../core/tools';
@@ -64,7 +65,88 @@ async function run() {
     running.value = false;
   }
 }
+
+/* ============================================================
+ * 讲解区:可播放的交互时序图(排版与动画都在 SeqDiagram 里)
+ * 四条泳道(用户 / Agent 循环 / 模型 / 工具),把一次完整编排拆成
+ * 16 步消息 —— 直观看到"依赖"与"回到 ② 再问一次"。
+ * ============================================================ */
+
+const LANES: SeqLane[] = [
+  { icon: '👤', name: '用户' },
+  { icon: '🔁', name: 'Agent 循环', sub: '(我们的代码)' },
+  { icon: '🧠', name: '模型' },
+  { icon: '🔧', name: '工具' },
+];
+
+const STATS: SeqStat[] = [
+  { label: '轮对话', count: 'group' },
+  { label: '次工具执行', count: 'obs' },
+];
+
+const STEPS: SeqStep[] = [
+  {
+    from: 0, to: 1, kind: 'ask', meter: 2, label: '一句话复合任务',
+    note: '用户只说一句话:报时 + 算剩余分钟 + 开灯。谁先谁后、要调几次工具,用户没说,我们的代码也没写。',
+  },
+  {
+    from: 1, to: 2, kind: 'call', meter: 2, group: '轮 1', label: 'messages + tools 清单',
+    note: '循环把「对话历史 + 三个工具的说明书」一起发给模型,然后问一句:下一步做什么?',
+  },
+  {
+    from: 2, to: 1, kind: 'ret', meter: 3, label: 'tool_calls: now()',
+    note: '模型判断:要算剩余分钟,先得知道现在几点 —— 于是点名 now。注意它只是「点名」,并不执行。',
+  },
+  {
+    from: 1, to: 3, kind: 'exec', meter: 3, label: '真正执行 now()',
+    note: '执行动作全部由我们的代码代劳。模型没有网络、没有时钟,一切副作用都发生在这一层。',
+  },
+  {
+    from: 3, to: 1, kind: 'obs', meter: 4, label: '"22:15"',
+    note: '工具返回结果。循环把它以 role:"tool" 追加进 messages —— 历史长了 1 条。',
+  },
+  {
+    from: 1, to: 2, kind: 'call', meter: 4, group: '轮 2', loop: true, label: '回到 ②:带着 now 的结果再问一次',
+    note: '★ 这就是「循环」:同样的请求,只是 messages 里多了刚才的工具结果。代码一行没变。',
+  },
+  {
+    from: 2, to: 1, kind: 'ret', meter: 5, dep: true,
+    label: 'calculator("(24*60)-(22*60+15)")',
+    note: '★ 依赖出现了:表达式里的 22 和 15,来自上一步 now 的返回值。模型是从 messages 里读到的。',
+  },
+  { from: 1, to: 3, kind: 'exec', meter: 5, label: '执行 calculator', note: '同样由循环执行,模型只是点了名。' },
+  {
+    from: 3, to: 1, kind: 'obs', meter: 6, label: '"105"',
+    note: '再次回填。此刻 messages 里已经躺着两个工具结果,模型下一轮能同时看到。',
+  },
+  {
+    from: 1, to: 2, kind: 'call', meter: 6, group: '轮 3', loop: true, label: '回到 ②:带着两个结果再问',
+    note: '每轮请求都比上一轮更长 —— 展开左侧「请求检查器」能亲眼看到这件事。',
+  },
+  {
+    from: 2, to: 1, kind: 'ret', meter: 7, label: 'toggle_lamp(true)',
+    note: '模型记得任务的最后一句「算完把灯打开」,于是收尾动作也由它自己决定。',
+  },
+  {
+    from: 1, to: 3, kind: 'exec', meter: 7, label: '执行 toggle_lamp',
+    note: '这一步有真实副作用 —— 左侧的灯会亮。Agent 的强大与危险都来自这里。',
+  },
+  { from: 3, to: 1, kind: 'obs', meter: 8, label: '"灯已打开 💡"', note: '第三个工具结果回填。' },
+  {
+    from: 1, to: 2, kind: 'call', meter: 8, group: '轮 4', loop: true, label: '回到 ②:带着三个结果再问',
+    note: '循环并不知道任务已经做完了 —— 它只会一直问,直到模型不再点名工具。',
+  },
+  {
+    from: 2, to: 1, kind: 'final', meter: 9, label: '没有 tool_calls,只有文字',
+    note: '★ 终止条件:响应里没有 tool_calls,循环就跳出。判断"做完了"的人是模型,不是我们。',
+  },
+  {
+    from: 1, to: 0, kind: 'answer', meter: 9, label: '最终答复 ✅',
+    note: '"现在 22:15,距 24:00 还有 105 分钟,灯已打开" —— 用户全程只说了一句话。',
+  },
+];
 </script>
+
 
 <template>
   <DemoLayout demo-id="multi-tool">
@@ -175,43 +257,16 @@ async function run() {
 
       <h3 class="sec-title" style="margin-top: 22px">交互图:三方在循环里怎么传话</h3>
       <p class="para">
-        把上面的时间线抽象成"谁和谁在交换什么"。注意<b>模型自己不执行任何工具</b>,一切工具都由中间的循环代劳:
+        把上面的时间线抽象成"谁和谁在交换什么"。<b>点播放看一遍</b> ——
+        注意<b>模型自己不执行任何工具</b>,一切工具都由中间的循环代劳;而每次工具结果回填后,都会<b>回到 ② 再问一次</b>。
       </p>
-      <div class="seq">
-        <div class="seq-cols">
-          <div class="seq-actor">👤 用户</div>
-          <div class="seq-actor hl">🔁 Agent 循环<br /><small>(我们的代码)</small></div>
-          <div class="seq-actor">🧠 模型</div>
-          <div class="seq-actor">🔧 工具</div>
-        </div>
-        <div class="seq-rows">
-          <div class="seq-row">
-            <span class="seq-msg a-to-b">① 复合任务(一句话)</span>
-          </div>
-          <div class="seq-row">
-            <span class="seq-msg b-to-c">② messages + tools →</span>
-          </div>
-          <div class="seq-row">
-            <span class="seq-msg c-to-b">③ ← "我要调 now"</span>
-          </div>
-          <div class="seq-row">
-            <span class="seq-msg b-to-d">④ 执行 now →</span>
-          </div>
-          <div class="seq-row">
-            <span class="seq-msg d-to-b">⑤ ← "22:15"</span>
-          </div>
-          <div class="seq-row loop-label">
-            <span>⑥ 把结果加进 messages,回到 ② 再问一次(带着新结果)——如此往复 now→calculator→toggle_lamp</span>
-          </div>
-          <div class="seq-row">
-            <span class="seq-msg c-to-b final">⑦ ← 模型不再要工具,给出最终答复</span>
-          </div>
-          <div class="seq-row">
-            <span class="seq-msg b-to-a">⑧ 返回结果给用户 ✅</span>
-          </div>
-        </div>
-      </div>
-
+      <SeqDiagram
+        :lanes="LANES"
+        :steps="STEPS"
+        :stats="STATS"
+        meter-label="messages"
+        hint="点「▶ 播放」逐步观看一次完整编排:4 轮对话、3 次工具执行、messages 从 2 条长到 9 条。"
+      />
       <h3 class="sec-title" style="margin-top: 22px">要点</h3>
       <ul class="points">
         <li><b>顺序由模型规划</b>:我们没写"先 now 再 calculator"的逻辑,是模型根据依赖关系自己排的。换个任务,它会排出不同顺序。</li>
@@ -364,95 +419,6 @@ async function run() {
   font-size: 11.5px;
   color: var(--c-text-soft);
   margin-top: 2px;
-}
-/* ---- 交互(时序)图 ---- */
-.seq {
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius-sm);
-  padding: 12px;
-  background: var(--c-bg);
-  overflow-x: auto;
-}
-.seq-cols {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 6px;
-  margin-bottom: 10px;
-  min-width: 440px;
-}
-.seq-actor {
-  text-align: center;
-  font-size: 12px;
-  font-weight: 600;
-  padding: 6px 4px;
-  background: var(--c-surface);
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius-sm);
-  line-height: 1.3;
-}
-.seq-actor small {
-  font-weight: 400;
-  color: var(--c-text-faint);
-  font-size: 10px;
-}
-.seq-actor.hl {
-  border-color: var(--c-primary);
-  background: var(--c-primary-soft);
-  color: var(--c-primary-hover);
-}
-.seq-rows {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  min-width: 440px;
-}
-.seq-row {
-  display: flex;
-}
-.seq-msg {
-  font-size: 12px;
-  padding: 5px 10px;
-  border-radius: var(--radius-sm);
-  background: var(--c-surface);
-  border: 1px solid var(--c-border);
-  line-height: 1.4;
-}
-/* 用左边距把消息大致对齐到"发起方→接收方"之间 */
-.a-to-b {
-  margin-left: 0;
-}
-.b-to-c {
-  margin-left: 25%;
-}
-.c-to-b {
-  margin-left: 25%;
-  background: #f5f3ff;
-  border-color: #ddd6fe;
-}
-.b-to-d {
-  margin-left: 50%;
-}
-.d-to-b {
-  margin-left: 50%;
-}
-.b-to-a {
-  margin-left: 0;
-  background: var(--c-success-soft);
-  border-color: #a7f3d0;
-}
-.c-to-b.final {
-  background: var(--c-success-soft);
-  border-color: #a7f3d0;
-  margin-left: 25%;
-}
-.loop-label {
-  font-size: 11.5px;
-  color: var(--c-primary-hover);
-  background: var(--c-primary-soft);
-  border: 1px dashed var(--c-primary);
-  border-radius: var(--radius-sm);
-  padding: 6px 10px;
-  line-height: 1.45;
 }
 .side-note {
   margin-top: 16px;

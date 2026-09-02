@@ -9,6 +9,10 @@
  * 不同厂商的差异,主要集中在 3 个字段:baseURL、鉴权方式、model 名。
  */
 
+// 开发期由 vite-plugin-local-models 注入根目录 models.local.json 的内容;
+// 没有该文件时、以及在 build 产物里,都是 null。
+import localModels from 'virtual:local-models';
+
 /** 支持的 API 协议风格。绝大多数国产/开源模型都兼容 OpenAI 协议 */
 export type ProtocolStyle = 'openai' | 'anthropic';
 
@@ -26,6 +30,8 @@ export interface ModelConfig {
   apiKey: string;
   /** 模型名,如 deepseek-chat / gpt-4o-mini / claude-3-5-sonnet-20241022 */
   model: string;
+  /** 来自根目录 models.local.json(开发期注入),而非手工在页面上添加 */
+  fromLocalFile?: boolean;
 }
 
 const STORAGE_KEY = 'hy-agent:model-configs';
@@ -68,6 +74,138 @@ export function getActiveConfig(): ModelConfig | null {
   const list = loadConfigs();
   const activeId = loadActiveId();
   return list.find((c) => c.id === activeId) ?? list[0] ?? null;
+}
+
+/* ============================================================
+ * 本地配置文件(开发期便利,不进版本库)
+ *
+ * 把常用模型写进根目录 models.local.json(见 models.local.example.json),
+ * dev server 启动时由 vite-plugin-local-models 注入,这里合并进 localStorage。
+ * 于是换浏览器、清缓存都不用重填 Key。
+ *
+ * 注意:build 产物里 localModels 恒为 null —— Key 不会被打包发布。
+ * 这只是开发便利,生产环境请把 Key 留在自己的后端。
+ * ============================================================ */
+
+/** 以 label 作为本地文件配置的身份(同名视为同一个,可覆盖更新) */
+function keyOf(c: { label: string }): string {
+  return c.label.trim();
+}
+
+/**
+ * 把 models.local.json 的内容合并进 localStorage。
+ * - 文件里的同名(label)配置会覆盖已存的那条,保证改了文件就生效
+ * - 用户在页面上手工添加的配置一律保留,不受影响
+ * - 文件指定的 active 会被选中(仅当当前没有有效选中项时)
+ *
+ * 返回是否发生了改动,调用方可据此决定要不要刷新界面。
+ */
+export function syncLocalFileConfigs(): boolean {
+  if (!localModels?.models?.length) return false;
+
+  const existing = loadConfigs();
+  const merged = [...existing];
+  let changed = false;
+
+  for (const item of localModels.models) {
+    // 缺了必要字段就跳过,避免把半成品写进存储
+    if (!item?.label || !item?.baseURL || !item?.model) continue;
+
+    const incoming: Omit<ModelConfig, 'id'> = {
+      label: item.label,
+      protocol: item.protocol === 'anthropic' ? 'anthropic' : 'openai',
+      baseURL: item.baseURL,
+      apiKey: item.apiKey ?? '',
+      model: item.model,
+      fromLocalFile: true,
+    };
+
+    const idx = merged.findIndex((c) => keyOf(c) === keyOf(item));
+    if (idx >= 0) {
+      const prev = merged[idx];
+      const next: ModelConfig = { id: prev.id, ...incoming };
+      // 内容一致就不写,免得每次刷新都触发一次无意义的更新
+      if (JSON.stringify(prev) !== JSON.stringify(next)) {
+        merged[idx] = next;
+        changed = true;
+      }
+    } else {
+      merged.push({ id: genId(), ...incoming });
+      changed = true;
+    }
+  }
+
+  if (changed) saveConfigs(merged);
+
+  // 文件里指定了默认模型,且当前没有有效选中项时,替它选上
+  const activeId = loadActiveId();
+  const activeStillValid = !!activeId && merged.some((c) => c.id === activeId);
+  if (!activeStillValid) {
+    const wanted = localModels.active?.trim();
+    const target = (wanted && merged.find((c) => keyOf(c) === wanted)) || merged[0];
+    if (target) {
+      saveActiveId(target.id);
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
+/** 把当前 localStorage 里的配置,转成 models.local.json 的内容结构 */
+export function buildLocalFileJson(): {
+  active?: string;
+  models: Omit<ModelConfig, 'id' | 'fromLocalFile'>[];
+} {
+  const list = loadConfigs();
+  const activeLabel = getActiveConfig()?.label;
+  return {
+    ...(activeLabel ? { active: activeLabel } : {}),
+    // 去掉 id(本地随机生成的,写进文件没意义)和 fromLocalFile(由插件回填)
+    models: list.map(({ label, protocol, baseURL, apiKey, model }) => ({
+      label,
+      protocol,
+      baseURL,
+      apiKey,
+      model,
+    })),
+  };
+}
+
+/**
+ * 当前页面是否跑在本机 —— 写入功能只在本机可用。
+ * 局域网里用 http://192.168.x.x:5188 打开时,服务端也会拒绝(见插件里的同名校验),
+ * 这里提前判断是为了直接把按钮藏掉,而不是等用户点了才报错。
+ */
+export function canWriteLocalFile(): boolean {
+  const h = location.hostname;
+  return h === 'localhost' || h === '127.0.0.1' || h === '::1' || h.startsWith('127.');
+}
+
+/**
+ * 把当前配置写进根目录 models.local.json(仅 dev server + 本机可用)。
+ * 走 vite 插件提供的写入端点 —— 浏览器自己没有写本地文件的能力。
+ */
+export async function writeLocalFile(): Promise<{ path: string; overwritten: boolean }> {
+  const payload = buildLocalFileJson();
+  if (payload.models.length === 0) throw new Error('当前没有任何模型配置,无需导出');
+
+  const res = await fetch('/__write-local-models', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  // 端点只在 dev server 存在;build 后的静态站点会返回 HTML 而非 JSON
+  const text = await res.text();
+  let data: any;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error('写入端点不可用 —— 这个功能只在 npm run dev 下有效');
+  }
+  if (!res.ok || data?.error) throw new Error(data?.error ?? `写入失败(HTTP ${res.status})`);
+  return { path: data.path, overwritten: data.overwritten };
 }
 
 /** 预置一些常见厂商的模板,降低第一次配置的心智负担 */

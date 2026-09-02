@@ -2,10 +2,11 @@ import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import { fileURLToPath, URL } from 'node:url';
 import { llmProxy } from './vite-plugin-llm-proxy';
+import { localModels } from './vite-plugin-local-models';
 
 // 纯前端教学项目:无需 SSR,Vite 启动轻快,现场演示更稳
 export default defineConfig({
-  plugins: [vue(), llmProxy()],
+  plugins: [vue(), llmProxy(), localModels()],
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),

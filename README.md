@@ -15,6 +15,24 @@ npm run dev        # 打开 http://localhost:5188
 
 > 想演示最后一课「多模型兼容」,请配置 **2 个及以上**模型,最好协议不同(如 DeepSeek + Claude)。
 
+### 免得每次重填:本地配置文件
+
+页面上填的配置存在浏览器 localStorage 里,换浏览器、清缓存就没了。想把常用模型固定下来,有两种方式:
+
+**① 已经在页面上配好了** —— 进 STEP 0,点配置列表下方的 **💾 保存到 models.local.json**,当前所有模型(含 Key 和"当前选中")一键落盘。
+
+**② 从零开始手写**:
+
+```bash
+cp models.local.example.json models.local.json   # 然后填入你自己的 Key
+```
+
+`npm run dev` 启动时会自动读它、合并进配置列表(以 `label` 为准,同名覆盖);手工改完文件页面会自动重载。在配置中心里,来自该文件的配置带一个 `📄 models.local.json` 标记。
+
+- **`models.local.json` 已被 `.gitignore` 忽略**,不会提交。
+- **只在 `vite dev` 生效**:`npm run build` 时注入的恒为 `null`,Key 不会被打进 `dist/`;写入端点也只存在于 dev server。
+- 这只是本机开发便利。**生产环境仍然要把 Key 留在自己的后端**,别放前端。
+
 ## 设计理念
 
 所有"教学精华"都沉淀在 **`src/core/*.ts`**(纯 TypeScript,不含任何 UI、不依赖任何 Agent 框架,总共约 500 行)。Demo 页面只是把这些能力**逐步解锁**并可视化。现场分享时,可以直接翻 `core/` 讲真实现:
