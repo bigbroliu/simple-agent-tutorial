@@ -16,6 +16,7 @@ const router = createRouter({
     { path: '/multi-model', component: () => import('./demos/Demo8MultiModel.vue') },
     { path: '/rag', component: () => import('./demos/DemoRag.vue') },
     { path: '/mcp', component: () => import('./demos/Demo9Mcp.vue') },
+    { path: '/skill', component: () => import('./demos/DemoSkill.vue') },
     { path: '/outlook', component: () => import('./demos/DemoOutlook.vue') },
   ],
 });

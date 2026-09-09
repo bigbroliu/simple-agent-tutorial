@@ -226,9 +226,40 @@ await runAgentLoop({
         <br />我们宿主是<b>浏览器</b>,起不了子进程,所以用 HTTP —— 这也是远程 MCP 的标准做法,协议方法完全一致。
       </div>
 
+      <h3 class="sec-title" style="margin-top: 18px">什么该留在本地?</h3>
+      <p class="para">
+        既然 MCP 只是工具的一个<b>来源</b>,那问题就只有一个:<b>什么东西过不了进程边界</b>。
+      </p>
+      <ul class="points">
+        <li>
+          <b>进程内副作用</b> —— <code class="inline">toggle_lamp</code> 要派发 DOM 事件、
+          <code class="inline">save_profile_card</code> 要 canvas 画图再触发下载。别的进程摸不到这张页面。
+          <b>凡是要影响自家界面的工具(跳路由、开弹窗、高亮元素),天然只能在本地。</b>
+        </li>
+        <li>
+          <b>宿主的身份与环境</b> —— <code class="inline">now</code> 返回的是<b>用户机器</b>的时钟与时区;
+          换成 MCP 就成了服务器的。同理:cookie / session,以及剪贴板、定位、摄像头这些授权给<b>本页面</b>的能力。
+        </li>
+        <li>
+          <b>不可序列化的东西</b> —— 协议上只能过 JSON。DOM 节点、函数、打开的连接都过不去。
+          这也是浏览器自动化类 MCP 只能返回<b>元素 id</b> 的原因:真实句柄留在 Server 那边。
+        </li>
+        <li>
+          <b>信任与失败面</b> —— 调 MCP 等于把参数交给第三方进程,还多出"服务没起来"这种失败模式
+          (上面那句连接失败提示就是这一层)。
+        </li>
+      </ul>
+      <div class="side-note">
+        这条边界<b>有多硬,取决于宿主</b>。浏览器画得最硬(连子进程都起不了);若宿主是 Node 进程,
+        前两条的大半就消失了。但最底下这条永远成立:<b>没有本地工具这一层,MCP 落不了地</b> ——
+        <code class="inline">tools/list</code> 拿回的描述要靠本地代码翻译成 schema,
+        <code class="inline">tools/call</code> 也得由本地代码发起。<b>Tool 是原语,MCP 是投递方式。</b>
+      </div>
+
       <div class="end-box">
         到这里,工具的来源从"本地私有代码"扩展到了"另一个进程里的标准可插拔服务"。
-        下一页是<b>课程收尾与展望</b> —— 回顾你已掌握的全部能力,并指出通往生产的后续方向。
+        但工具解决的是<b>「能做」</b> —— 下一课讲<b>「会做」</b>:把团队的流程与规范沉淀成
+        <b>Skill</b>,让模型按需装载。
       </div>
     </template>
   </DemoLayout>
@@ -341,6 +372,16 @@ await runAgentLoop({
 }
 .points li {
   margin-bottom: 8px;
+}
+.side-note {
+  margin-top: 16px;
+  padding: 10px 14px;
+  background: var(--c-bg);
+  border-left: 3px solid var(--c-border-strong);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-size: 12.5px;
+  color: var(--c-text-soft);
+  line-height: 1.65;
 }
 .note-box {
   margin-top: 18px;

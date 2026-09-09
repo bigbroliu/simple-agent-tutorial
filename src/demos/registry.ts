@@ -89,8 +89,15 @@ export const DEMOS: DemoMeta[] = [
     concept: 'MCP / JSON-RPC',
   },
   {
-    id: 'outlook',
+    id: 'skill',
     order: 11,
+    title: 'Skill:按需装载的做事方法',
+    subtitle: 'Tool 给"能做",Skill 给"会做";而 Skill 正是用 Tool 实现的',
+    concept: 'Skill / 渐进式披露',
+  },
+  {
+    id: 'outlook',
+    order: 12,
     title: '展望:从骨架到生产',
     subtitle: '回顾已掌握的能力,以及真实工程里的后续方向',
     concept: '总结 / 展望',
